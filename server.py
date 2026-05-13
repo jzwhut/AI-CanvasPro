@@ -73,6 +73,11 @@ STATIC_VIDEO_CACHE_EXTS = {
 DERIVED_MEDIA_CACHE_CONTROL = "public, max-age=604800, immutable"
 STATIC_VIDEO_CACHE_CONTROL = "public, max-age=86400"
 NO_STORE_CACHE_CONTROL = "no-store, no-cache, must-revalidate, max-age=0"
+SMART_CLIP_MIN_SEGMENTS = 2
+SMART_CLIP_MAX_SEGMENTS = 25
+SMART_CLIP_DEFAULT_SEGMENTS = 20
+SMART_CLIP_FPS_OPTIONS = (16, 24, 30)
+SMART_CLIP_DEFAULT_FPS = 24
 DERIVED_STATIC_MEDIA_PREFIXES = (
     "/data/uploads/_derived/",
     "/data/assets/_derived/",
@@ -205,6 +210,20 @@ _smart_clip_lock = threading.Lock()
 _file_save_migration_jobs = {}
 _file_save_migration_lock = threading.Lock()
 
+def _normalize_smart_clip_max_segments(value):
+    try:
+        max_segments = int(value)
+    except Exception:
+        max_segments = SMART_CLIP_DEFAULT_SEGMENTS
+    return max(SMART_CLIP_MIN_SEGMENTS, min(SMART_CLIP_MAX_SEGMENTS, max_segments))
+
+def _normalize_smart_clip_fps(value):
+    try:
+        fps = int(round(float(value)))
+    except Exception:
+        fps = SMART_CLIP_DEFAULT_FPS
+    return fps if fps in SMART_CLIP_FPS_OPTIONS else SMART_CLIP_DEFAULT_FPS
+
 # --- 可配置的数据目录，默认位于 v2/ 下 ---
 DEFAULT_USER_DIR = _get_path_env("AIC_USER_DIR", os.path.join(DIRECTORY, "user"))
 DEFAULT_CANVAS_DIR = _get_path_env("AIC_CANVAS_DIR", os.path.join(DEFAULT_USER_DIR, "Canvas Project"))
@@ -281,7 +300,15 @@ DEFAULT_SUB_CONTACT_TEXT = os.environ.get(
     "AIC_SUB_CONTACT_TEXT",
     "联系管理员获取授权码",
 ).strip() or "联系管理员获取授权码"
-DEFAULT_SUB_CONTACT_URL = os.environ.get("AIC_SUB_CONTACT_URL", "").strip()
+DEFAULT_SUB_CONTACT_WECHAT = os.environ.get(
+    "AIC_SUB_CONTACT_WECHAT",
+    "yumengashuo",
+).strip() or "yumengashuo"
+DEFAULT_SUB_CONTACT_IMAGE_URL = "https://api.ashuoai.com/static/contact/wechat.png"
+DEFAULT_SUB_CONTACT_URL = os.environ.get(
+    "AIC_SUB_CONTACT_URL",
+    DEFAULT_SUB_CONTACT_IMAGE_URL,
+).strip()
 OFFICIAL_SUBSCRIPTION_API_BASE = "https://api.ashuoai.com"
 
 
@@ -943,6 +970,7 @@ SUBSCRIPTION_CLIENT = SubscriptionRemoteClient(
     required_message=SUB_MESSAGE_V54_REQUIRED,
     contact_text=DEFAULT_SUB_CONTACT_TEXT,
     contact_url=DEFAULT_SUB_CONTACT_URL,
+    contact_wechat=DEFAULT_SUB_CONTACT_WECHAT,
 )
 SUBSCRIPTION_GATE_SERVICE = SubscriptionGateService(
     client=SUBSCRIPTION_CLIENT,
@@ -1398,6 +1426,7 @@ HTTP_ROUTE_DISPATCHER = HttpRouteDispatcher(
     sub_error_invalid_arguments=SUB_ERROR_INVALID_ARGUMENTS,
     default_sub_contact_text=DEFAULT_SUB_CONTACT_TEXT,
     default_sub_contact_url=DEFAULT_SUB_CONTACT_URL,
+    default_sub_contact_wechat=DEFAULT_SUB_CONTACT_WECHAT,
     json_ok=_json_ok,
     json_err=_json_err,
     send_route_response=_send_route_response,
@@ -1426,11 +1455,12 @@ def _run_smart_clip_job(job_id, local_src, options):
         mode = mode_map.get(raw_mode, raw_mode)
         if mode not in ("stable", "balanced", "sensitive"):
             mode = "stable"
-        try:
-            max_segments = int(opt.get("maxSegments", 20))
-        except Exception:
-            max_segments = 20
-        max_segments = max(2, min(200, max_segments))
+        max_segments = _normalize_smart_clip_max_segments(
+            opt.get("maxSegments", SMART_CLIP_DEFAULT_SEGMENTS)
+        )
+        output_fps = _normalize_smart_clip_fps(
+            opt.get("fps", opt.get("frameRate", SMART_CLIP_DEFAULT_FPS))
+        )
 
         try:
             black_luma_thr = float(opt.get("blackLuma", 16.0))
@@ -1476,82 +1506,10 @@ def _run_smart_clip_job(job_id, local_src, options):
             except Exception:
                 return 0.0
 
-        def _ffprobe_video_fps_str(p):
-            try:
-                cmd = [
-                    FFPROBE_EXE,
-                    "-v",
-                    "error",
-                    "-select_streams",
-                    "v:0",
-                    "-show_entries",
-                    "stream=avg_frame_rate,r_frame_rate",
-                    "-of",
-                    "json",
-                    p,
-                ]
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    startupinfo=startupinfo,
-                )
-                stdout, _ = process.communicate(timeout=20)
-                if process.returncode != 0:
-                    return None
-                txt = (stdout or b"").decode("utf-8", errors="ignore").strip()
-                if not txt:
-                    return None
-                j = json.loads(txt)
-                streams = j.get("streams") or []
-                if not streams:
-                    return None
-                s0 = streams[0] if isinstance(streams[0], dict) else {}
-                avg = (s0.get("avg_frame_rate") or "").strip()
-                rr = (s0.get("r_frame_rate") or "").strip()
-                cand = None
-                if avg and avg not in ("0/0", "0"):
-                    cand = avg
-                elif rr and rr not in ("0/0", "0"):
-                    cand = rr
-                if not cand:
-                    return None
-
-                def _to_float(x):
-                    raw = (x or "").strip()
-                    if not raw:
-                        return 0.0
-                    if "/" in raw:
-                        a, b = raw.split("/", 1)
-                        na = float(a)
-                        nb = float(b)
-                        if nb == 0:
-                            return 0.0
-                        return na / nb
-                    return float(raw)
-
-                fps_v = _to_float(cand)
-                if not fps_v or fps_v <= 0:
-                    return None
-                buckets = (24, 25, 30, 50, 60)
-                closest = None
-                closest_d = 999.0
-                for b in buckets:
-                    d = abs(fps_v - float(b))
-                    if d < closest_d:
-                        closest_d = d
-                        closest = b
-                fps_i = int(closest) if closest is not None and closest_d <= 0.2 else int(round(fps_v))
-                if fps_i <= 0:
-                    return None
-                return str(fps_i)
-            except Exception:
-                return None
-
         duration_sec = _ffprobe_duration_sec(local_src)
         if not duration_sec or duration_sec <= 0:
             duration_sec = 0.0
-        fps_str = _ffprobe_video_fps_str(local_src)
+        fps_str = str(output_fps)
 
         def _run_detect_content_boundaries(threshold, min_scene_sec):
             try:
@@ -1862,6 +1820,7 @@ def _run_smart_clip_job(job_id, local_src, options):
                     "start": s,
                     "end": e,
                     "duration": dur,
+                    "fps": output_fps,
                     "path": rel,
                     "localPath": rel,
                     "url": f"/{rel}",
@@ -2103,7 +2062,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, PATCH, OPTIONS")
         self.send_header(
             "Access-Control-Allow-Headers",
-            "Content-Type, Authorization, X-AIC-Install-Id, X-AIC-Local-Token",
+            "Content-Type, Authorization, X-AIC-Install-Id, X-AIC-Device-Id, X-AIC-Local-Token",
         )
         self.end_headers()
 
@@ -2608,12 +2567,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 re.search(r"/openapi/v2/query(?:$|[/?])", api_url, flags=re.IGNORECASE)
             )
             # 仅在“提交任务”类端点启用 task_id 快速探测；
-            # 查询类端点必须透传完整响应，否则前端无法拿到最终出图 URL。
+            # 查询类端点和 GRSAI 新 JSON 端点必须透传完整响应，否则前端无法拿到最终出图 URL。
             is_grsai_query_endpoint = bool(
-                re.search(r"/v1/draw/(?:result|query)(?:$|[/?])", api_url, flags=re.IGNORECASE)
+                re.search(
+                    r"/v1/(?:draw/(?:result|query)|api/result)(?:$|[/?])",
+                    api_url,
+                    flags=re.IGNORECASE,
+                )
+            )
+            is_grsai_generate_endpoint = bool(
+                re.search(r"/v1/api/generate(?:$|[/?])", api_url, flags=re.IGNORECASE)
             )
             allow_task_probe_short_circuit = not (
-                is_runninghub_query_endpoint or is_grsai_query_endpoint
+                is_runninghub_query_endpoint
+                or is_grsai_query_endpoint
+                or is_grsai_generate_endpoint
             )
             if workflow_id in VIDEO_VIP_WORKFLOW_IDS:
                 if not _enforce_vip_subscription_gate(

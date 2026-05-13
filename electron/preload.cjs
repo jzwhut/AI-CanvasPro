@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer, webUtils } = require("electron");
 contextBridge.exposeInMainWorld("aiCanvasDesktop", {
   isElectron: true,
   getAppVersion: () => ipcRenderer.invoke("app:getVersion"),
+  getDeviceId: (payload) => ipcRenderer.invoke("app:getDeviceId", payload),
   checkForUpdates: () => ipcRenderer.invoke("appUpdater:checkForUpdates"),
   getUpdateState: () => ipcRenderer.invoke("appUpdater:getState"),
   downloadUpdate: () => ipcRenderer.invoke("appUpdater:downloadUpdate"),
@@ -66,6 +67,29 @@ contextBridge.exposeInMainWorld("electronAPI", {
     readFileReferences: () => ipcRenderer.invoke("clipboard:readFileReferences"),
     writeText: (payload) => ipcRenderer.invoke("clipboard:writeText", payload),
     readText: () => ipcRenderer.invoke("clipboard:readText"),
+  },
+  screenshot: {
+    captureDisplay: () => ipcRenderer.invoke("screenshot:captureDisplay"),
+    onGlobalCapture: (callback) => {
+      if (typeof callback !== "function") return () => {};
+      const listener = (_event, payload) => {
+        callback(payload);
+      };
+      ipcRenderer.on("screenshot:globalCaptureReady", listener);
+      return () => {
+        ipcRenderer.removeListener("screenshot:globalCaptureReady", listener);
+      };
+    },
+    onGlobalShortcutStatus: (callback) => {
+      if (typeof callback !== "function") return () => {};
+      const listener = (_event, payload) => {
+        callback(payload);
+      };
+      ipcRenderer.on("screenshot:globalShortcutStatus", listener);
+      return () => {
+        ipcRenderer.removeListener("screenshot:globalShortcutStatus", listener);
+      };
+    },
   },
   secureSettings: {
     get: (payload) => ipcRenderer.invoke("secureSettings:get", payload),

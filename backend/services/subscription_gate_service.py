@@ -91,20 +91,32 @@ class SubscriptionGateService:
             n = int(n / 1000)
         return n if n > 0 else 0
 
-    def clear_vip_allow_cache(self, install_id):
+    def _cache_key(self, install_id, device_id=""):
+        install = str(install_id or "").strip()
+        device = str(device_id or "").strip()
+        return f"{install}\n{device or install}" if install else ""
+
+    def clear_vip_allow_cache(self, install_id, device_id=""):
         install = str(install_id or "").strip()
         if not install:
             return
+        key = self._cache_key(install, device_id)
         with self._lock:
-            self._allow_cache.pop(install, None)
+            if key:
+                self._allow_cache.pop(key, None)
+            for cache_key in list(self._allow_cache.keys()):
+                if str(cache_key).split("\n", 1)[0] == install:
+                    self._allow_cache.pop(cache_key, None)
 
-    def _get_cached_vip_allow_decision(self, install_id, model_id):
+    def _get_cached_vip_allow_decision(self, install_id, model_id, device_id=""):
         install = str(install_id or "").strip()
+        device = str(device_id or "").strip() or install
         model = str(model_id or "").strip()
         if not install or not model:
             return None
+        key = self._cache_key(install, device)
         with self._lock:
-            cached = self._allow_cache.get(install)
+            cached = self._allow_cache.get(key)
         if not isinstance(cached, dict):
             return None
 
@@ -116,7 +128,7 @@ class SubscriptionGateService:
         expires_at = int(cached.get("expiresAt") or 0)
         if expires_at > 0 and expires_at <= now_ts:
             with self._lock:
-                self._allow_cache.pop(install, None)
+                self._allow_cache.pop(key, None)
             return None
 
         entitled_ids = self.extract_entitled_model_ids(cached)
@@ -126,6 +138,7 @@ class SubscriptionGateService:
         return {
             "allowed": True,
             "installId": install,
+            "deviceId": device,
             "status": self.status_active,
             "reasonCode": "ACTIVE_CACHE_HIT",
             "reasonMessage": "",
@@ -137,21 +150,45 @@ class SubscriptionGateService:
             },
         }
 
-    def _cache_vip_allow_decision(self, install_id, *, payload, entitled_ids):
+    def _cache_vip_allow_decision(self, install_id, *, payload, entitled_ids, device_id=""):
         install = str(install_id or "").strip()
         if not install:
             return
+        device = str(device_id or "").strip() or install
+        key = self._cache_key(install, device)
         entry = {
             "status": self.status_active,
             "expiresAt": self.extract_expires_at(payload),
             "entitledModelIds": list(entitled_ids or []),
+            "deviceId": device,
             "cachedAt": int(time.time()),
         }
         with self._lock:
-            self._allow_cache.pop(install, None)
-            self._allow_cache[install] = entry
+            self._allow_cache.pop(key, None)
+            self._allow_cache[key] = entry
             while len(self._allow_cache) > self.cache_max:
                 self._allow_cache.popitem(last=False)
+
+    def _extract_device_id_from_request(self, handler, payload=None, fallback_install_id=""):
+        extractor = getattr(self.client, "extract_device_id_from_request", None)
+        if not callable(extractor):
+            return str(fallback_install_id or "").strip()
+        try:
+            return str(
+                extractor(
+                    handler,
+                    payload,
+                    fallback_install_id=fallback_install_id,
+                )
+                or ""
+            ).strip()
+        except TypeError:
+            try:
+                return str(extractor(handler, payload) or "").strip()
+            except Exception:
+                return str(fallback_install_id or "").strip()
+        except Exception:
+            return str(fallback_install_id or "").strip()
 
     def _mark_first_vip_gate_success_log(self, install_id):
         install = str(install_id or "").strip()
@@ -184,27 +221,37 @@ class SubscriptionGateService:
 
     def check_vip_subscription_gate(self, handler, payload=None, required_model_id=""):
         install_id = self.extract_install_id_from_request(handler, payload)
+        device_id = self._extract_device_id_from_request(
+            handler,
+            payload,
+            fallback_install_id=install_id,
+        )
         model_id = self.normalize_vip_model_id(required_model_id)
-        cached_decision = self._get_cached_vip_allow_decision(install_id, model_id)
+        cached_decision = self._get_cached_vip_allow_decision(install_id, model_id, device_id)
         if isinstance(cached_decision, dict):
             return cached_decision
 
-        decision = self.client.evaluate_install_active(install_id)
+        try:
+            decision = self.client.evaluate_install_active(install_id, device_id=device_id)
+        except TypeError:
+            decision = self.client.evaluate_install_active(install_id)
         decision = dict(decision) if isinstance(decision, dict) else {}
         decision["requiredModelId"] = model_id
+        if device_id:
+            decision["deviceId"] = device_id
         if bool(decision.get("allowed")) and model_id:
             entitled_ids = self.extract_entitled_model_ids(decision.get("payload"))
             entitled = (
                 model_id in entitled_ids
                 if entitled_ids
-                else self.client.is_install_entitled_for_model(install_id, model_id)
+                else self._is_install_entitled_for_model(install_id, model_id, device_id)
             )
             if not entitled:
                 decision["allowed"] = False
                 decision["reasonCode"] = self.error_model_not_entitled
                 model_name = self.model_name_map.get(model_id) or model_id
                 decision["reasonMessage"] = f"当前订阅未包含 {model_name}"
-                self.clear_vip_allow_cache(install_id)
+                self.clear_vip_allow_cache(install_id, device_id)
             else:
                 if not entitled_ids:
                     entitled_ids = [model_id]
@@ -212,11 +259,22 @@ class SubscriptionGateService:
                     install_id,
                     payload=decision.get("payload"),
                     entitled_ids=entitled_ids,
+                    device_id=device_id,
                 )
         elif install_id:
-            self.clear_vip_allow_cache(install_id)
+            self.clear_vip_allow_cache(install_id, device_id)
         self._log_first_vip_gate_success(decision)
         return decision
+
+    def _is_install_entitled_for_model(self, install_id, model_id, device_id=""):
+        try:
+            return self.client.is_install_entitled_for_model(
+                install_id,
+                model_id,
+                device_id=device_id,
+            )
+        except TypeError:
+            return self.client.is_install_entitled_for_model(install_id, model_id)
 
     def build_subscription_denial_payload(self, decision):
         decision = dict(decision) if isinstance(decision, dict) else {}
@@ -226,5 +284,6 @@ class SubscriptionGateService:
         denial["reasonCode"] = decision.get("reasonCode") or ""
         denial["subscriptionStatus"] = decision.get("status") or self.status_none
         denial["installId"] = decision.get("installId") or ""
+        denial["deviceId"] = decision.get("deviceId") or ""
         denial["requiredModelId"] = decision.get("requiredModelId") or ""
         return denial

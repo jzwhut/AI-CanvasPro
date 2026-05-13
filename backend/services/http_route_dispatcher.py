@@ -36,6 +36,7 @@ class HttpRouteDispatcher:
         sub_error_invalid_arguments,
         default_sub_contact_text,
         default_sub_contact_url,
+        default_sub_contact_wechat,
         json_ok,
         json_err,
         send_route_response,
@@ -61,6 +62,7 @@ class HttpRouteDispatcher:
         self._sub_error_invalid_arguments = str(sub_error_invalid_arguments or "")
         self._default_sub_contact_text = str(default_sub_contact_text or "")
         self._default_sub_contact_url = str(default_sub_contact_url or "")
+        self._default_sub_contact_wechat = str(default_sub_contact_wechat or "")
         self._json_ok = json_ok
         self._json_err = json_err
         self._send_route_response = send_route_response
@@ -82,6 +84,38 @@ class HttpRouteDispatcher:
             return bool(default)
         return str(raw).strip().lower() in cls._TRUE_VALUES
 
+    def _with_subscription_contact_defaults(self, payload):
+        if not isinstance(payload, dict):
+            return payload
+        result = dict(payload)
+        target = result
+        nested = result.get("data")
+        if isinstance(nested, dict):
+            target = dict(nested)
+            result["data"] = target
+
+        has_contact_text = str(
+            target.get("contactText") or target.get("contact_text") or ""
+        ).strip()
+        has_contact_url = str(
+            target.get("contactUrl") or target.get("contact_url") or ""
+        ).strip()
+        has_contact_wechat = str(
+            target.get("contactWechat")
+            or target.get("contact_wechat")
+            or target.get("wechat")
+            or target.get("wechatId")
+            or target.get("wechat_id")
+            or ""
+        ).strip()
+        if not has_contact_text and self._default_sub_contact_text:
+            target["contactText"] = self._default_sub_contact_text
+        if not has_contact_url and self._default_sub_contact_url:
+            target["contactUrl"] = self._default_sub_contact_url
+        if not has_contact_wechat and self._default_sub_contact_wechat:
+            target["contactWechat"] = self._default_sub_contact_wechat
+        return result
+
     def _subscription_missing_payload(self, *, message):
         return {
             "success": False,
@@ -90,6 +124,7 @@ class HttpRouteDispatcher:
             "message": str(message or ""),
             "contactText": self._default_sub_contact_text,
             "contactUrl": self._default_sub_contact_url,
+            "contactWechat": self._default_sub_contact_wechat,
         }
 
     def _subscription_unavailable_payload(self):
@@ -100,6 +135,7 @@ class HttpRouteDispatcher:
             "message": SUBSCRIPTION_NETWORK_HELP_MESSAGE,
             "contactText": self._default_sub_contact_text,
             "contactUrl": self._default_sub_contact_url,
+            "contactWechat": self._default_sub_contact_wechat,
         }
 
     def _activation_missing_payload(self):
@@ -109,6 +145,7 @@ class HttpRouteDispatcher:
             "message": "Missing installId or cdkey",
             "contactText": self._default_sub_contact_text,
             "contactUrl": self._default_sub_contact_url,
+            "contactWechat": self._default_sub_contact_wechat,
         }
 
     def _runtime_info_payload(self):
@@ -133,9 +170,17 @@ class HttpRouteDispatcher:
                 self._subscription_missing_payload(message="Missing installId"),
             )
             return True
-        payload = client.fetch_subscription_status(install_id)
+        device_id = self._extract_subscription_device_id(
+            client,
+            handler,
+            fallback_install_id=install_id,
+        )
+        try:
+            payload = client.fetch_subscription_status(install_id, device_id=device_id)
+        except TypeError:
+            payload = client.fetch_subscription_status(install_id)
         if isinstance(payload, dict):
-            self._json_ok(handler, payload)
+            self._json_ok(handler, self._with_subscription_contact_defaults(payload))
         else:
             self._json_ok(handler, self._subscription_unavailable_payload())
         return True
@@ -209,17 +254,52 @@ class HttpRouteDispatcher:
         client = self._get_subscription_client()
         gate_service = self._get_subscription_gate_service()
         install_id = gate_service.extract_install_id_from_request(handler, data)
+        device_id = self._extract_subscription_device_id(
+            client,
+            handler,
+            payload=data,
+            fallback_install_id=install_id,
+        )
         cdkey = str(data.get("cdkey") or "").strip()
         if not install_id or not cdkey:
             self._json_ok(handler, self._activation_missing_payload())
             return True
-        payload = client.activate_cdkey(install_id, cdkey)
-        gate_service.clear_vip_allow_cache(install_id)
+        try:
+            payload = client.activate_cdkey(install_id, cdkey, device_id=device_id)
+        except TypeError:
+            payload = client.activate_cdkey(install_id, cdkey)
+        try:
+            gate_service.clear_vip_allow_cache(install_id, device_id=device_id)
+        except TypeError:
+            gate_service.clear_vip_allow_cache(install_id)
         if isinstance(payload, dict):
-            self._json_ok(handler, payload)
+            self._json_ok(handler, self._with_subscription_contact_defaults(payload))
         else:
             self._json_ok(handler, self._subscription_unavailable_payload())
         return True
+
+    def _extract_subscription_device_id(
+        self,
+        client,
+        handler,
+        payload=None,
+        fallback_install_id="",
+    ):
+        extractor = getattr(client, "extract_device_id_from_request", None)
+        if callable(extractor):
+            try:
+                return extractor(
+                    handler,
+                    payload,
+                    fallback_install_id=fallback_install_id,
+                )
+            except TypeError:
+                return extractor(handler, payload)
+        if isinstance(payload, dict):
+            value = str(payload.get("deviceId") or payload.get("device_id") or "").strip()
+            if value:
+                return value
+        return str(fallback_install_id or "").strip()
 
     def _handle_update_apply(self, handler):
         try:

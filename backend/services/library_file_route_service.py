@@ -7,6 +7,8 @@ import re
 class LibraryFileRouteService:
     _DEFAULT_PRESET_TYPES = ("ai-image", "ai-text", "ai-video", "ai-audio")
     _PRESET_THUMB_USER_PREFIX = "user/prompt/_thumbs/presets/"
+    _PRESET_TRIGGER_MODE_DIRECT = "direct"
+    _PRESET_TRIGGER_MODE_INSERT_PROMPT = "insertPrompt"
 
     def __init__(
         self,
@@ -66,6 +68,13 @@ class LibraryFileRouteService:
         text = str(value or "")
         text = re.sub(r"<[^>]+>", "", text)
         return text.strip()
+
+    @staticmethod
+    def _normalize_preset_trigger_mode(value):
+        mode = str(value or "").strip()
+        if mode == LibraryFileRouteService._PRESET_TRIGGER_MODE_INSERT_PROMPT:
+            return mode
+        return LibraryFileRouteService._PRESET_TRIGGER_MODE_DIRECT
 
     def _normalize_preset_type(self, value):
         preset_type = str(value or "").strip()
@@ -211,6 +220,14 @@ class LibraryFileRouteService:
                                     if thumb_local_path:
                                         item["thumbLocalPath"] = thumb_local_path
                                         item["thumbUrl"] = f"/{thumb_local_path}"
+                                    trigger_mode = self._normalize_preset_trigger_mode(
+                                        meta.get("triggerMode") if isinstance(meta, dict) else ""
+                                    )
+                                    if (
+                                        trigger_mode
+                                        == LibraryFileRouteService._PRESET_TRIGGER_MODE_INSERT_PROMPT
+                                    ):
+                                        item["triggerMode"] = trigger_mode
                                 except Exception as exc:
                                     print(f"Error reading preset metadata {meta_path}: {exc}")
                             result[node_type].append(item)
@@ -230,6 +247,7 @@ class LibraryFileRouteService:
             data.get("thumbLocalPath") or data.get("thumbnailLocalPath")
         )
         thumbnail_data_url = str(data.get("thumbnailDataUrl") or "").strip()
+        trigger_mode = self._normalize_preset_trigger_mode(data.get("triggerMode"))
         if not preset_type:
             return self._json_err(400, "Invalid nodeType")
         if not title:
@@ -292,6 +310,8 @@ class LibraryFileRouteService:
             meta_payload["desc"] = desc
         if thumb_local_path:
             meta_payload["thumbLocalPath"] = thumb_local_path
+        if trigger_mode == self._PRESET_TRIGGER_MODE_INSERT_PROMPT:
+            meta_payload["triggerMode"] = trigger_mode
         if meta_payload and target_meta_path:
             with open(target_meta_path, "w", encoding="utf-8") as file:
                 json.dump(meta_payload, file, ensure_ascii=False)

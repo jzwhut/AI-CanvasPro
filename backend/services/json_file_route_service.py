@@ -241,6 +241,7 @@ class JsonFileRouteService:
 
         kind = self._first_query_value(query, "kind")
         project_id = self._first_query_value(query, "projectId")
+        canvas_id = self._first_query_value(query, "canvasId")
         media_kind = self._first_query_value(query, "mediaKind")
         order = str(self._first_query_value(query, "order", "desc") or "desc").lower()
         if order not in ("asc", "desc"):
@@ -258,6 +259,8 @@ class JsonFileRouteService:
             if kind and str(asset.get("kind") or "").strip() != kind:
                 continue
             if project_id and str(asset.get("projectId") or "").strip() != project_id:
+                continue
+            if canvas_id and str(asset.get("canvasId") or "").strip() != canvas_id:
                 continue
             if media_kind and str(asset.get("mediaKind") or "").strip().lower() != media_kind.lower():
                 continue

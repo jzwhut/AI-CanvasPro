@@ -23,6 +23,7 @@ class SubscriptionRemoteClient:
         required_message,
         contact_text,
         contact_url,
+        contact_wechat="",
     ):
         self.api_base_url = str(api_base_url or "").strip().rstrip("/")
         self.timeout_seconds = max(1, int(timeout_seconds or 5))
@@ -31,6 +32,7 @@ class SubscriptionRemoteClient:
         self.required_message = str(required_message or "该模型为 VIP，请先激活 CDKEY/订阅")
         self.contact_text = str(contact_text or "").strip()
         self.contact_url = str(contact_url or "").strip()
+        self.contact_wechat = str(contact_wechat or "").strip()
         self.status_none = "none"
         self.status_expired = "expired"
 
@@ -42,8 +44,16 @@ class SubscriptionRemoteClient:
             return ""
         return s
 
+    def normalize_device_id(self, value):
+        s = str(value or "").strip()
+        if not s or len(s) > 256:
+            return ""
+        if not re.match(r"^[A-Za-z0-9._:-]+$", s):
+            return ""
+        return s
+
     def extract_install_id_from_request(self, handler, payload=None):
-        header_value = handler.headers.get("X-AIC-Install-Id", "")
+        header_value = handler.headers.get("X-AIC-Install-Id", "") if handler is not None else ""
         install = self.normalize_install_id(header_value)
         if install:
             return install
@@ -51,10 +61,31 @@ class SubscriptionRemoteClient:
             install = self.normalize_install_id(payload.get("installId"))
             if install:
                 return install
+        if handler is None:
+            return ""
         parsed = urllib.parse.urlparse(handler.path)
         qs = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, max_num_fields=20)
         install_qs = (qs.get("installId") or [""])[0]
         return self.normalize_install_id(install_qs)
+
+    def extract_device_id_from_request(self, handler, payload=None, fallback_install_id=""):
+        header_value = handler.headers.get("X-AIC-Device-Id", "") if handler is not None else ""
+        device = self.normalize_device_id(header_value)
+        if device:
+            return device
+        if isinstance(payload, dict):
+            device = self.normalize_device_id(payload.get("deviceId") or payload.get("device_id"))
+            if device:
+                return device
+        if handler is None:
+            return self.normalize_device_id(fallback_install_id)
+        parsed = urllib.parse.urlparse(handler.path)
+        qs = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, max_num_fields=20)
+        device_qs = (qs.get("deviceId") or qs.get("device_id") or [""])[0]
+        device = self.normalize_device_id(device_qs)
+        if device:
+            return device
+        return self.normalize_device_id(fallback_install_id)
 
     def subscription_required_payload(self, reason=None):
         message = self.required_message
@@ -66,6 +97,7 @@ class SubscriptionRemoteClient:
             "message": message,
             "contactText": self.contact_text,
             "contactUrl": self.contact_url,
+            "contactWechat": self.contact_wechat,
         }
 
     def _request_json(self, method, path, *, payload=None, query=None):
@@ -123,43 +155,54 @@ class SubscriptionRemoteClient:
             return self.status_none
         return self.status_none
 
-    def fetch_subscription_status(self, install_id):
+    def fetch_subscription_status(self, install_id, device_id=None):
         install = self.normalize_install_id(install_id)
         if not install:
             return None
+        device = self.normalize_device_id(device_id) or install
+        query = {"installId": install}
+        if device:
+            query["deviceId"] = device
         return self._request_json(
             "GET",
             "/api/subscription/status",
-            query={"installId": install},
+            query=query,
         )
 
-    def activate_cdkey(self, install_id, cdkey):
+    def activate_cdkey(self, install_id, cdkey, device_id=None):
         install = self.normalize_install_id(install_id)
+        device = self.normalize_device_id(device_id) or install
         token = str(cdkey or "").strip()
         if not install or not token:
             return None
+        payload = {"installId": install, "cdkey": token}
+        if device:
+            payload["deviceId"] = device
         return self._request_json(
             "POST",
             "/api/subscription/activate",
-            payload={"installId": install, "cdkey": token},
+            payload=payload,
         )
 
-    def evaluate_install_active(self, install_id):
+    def evaluate_install_active(self, install_id, device_id=None):
         install = self.normalize_install_id(install_id)
+        device = self.normalize_device_id(device_id) or install
         if not install:
             return {
                 "allowed": False,
                 "installId": "",
+                "deviceId": "",
                 "status": self.status_none,
                 "reasonCode": "MISSING_INSTALL_ID",
                 "reasonMessage": "缺少 installId",
                 "payload": None,
             }
-        data = self.fetch_subscription_status(install)
+        data = self.fetch_subscription_status(install, device)
         if not isinstance(data, dict):
             return {
                 "allowed": False,
                 "installId": install,
+                "deviceId": device,
                 "status": self.status_none,
                 "reasonCode": "SERVICE_UNAVAILABLE",
                 "reasonMessage": SUBSCRIPTION_NETWORK_HELP_MESSAGE,
@@ -177,6 +220,7 @@ class SubscriptionRemoteClient:
             return {
                 "allowed": True,
                 "installId": install,
+                "deviceId": device,
                 "status": status,
                 "reasonCode": "ACTIVE",
                 "reasonMessage": "",
@@ -191,20 +235,22 @@ class SubscriptionRemoteClient:
         return {
             "allowed": False,
             "installId": install,
+            "deviceId": device,
             "status": status,
             "reasonCode": reason_code,
             "reasonMessage": reason_message,
             "payload": data,
         }
 
-    def _fetch_status_payload(self, install_id):
-        return self.fetch_subscription_status(install_id)
+    def _fetch_status_payload(self, install_id, device_id=None):
+        return self.fetch_subscription_status(install_id, device_id)
 
-    def is_install_entitled_for_model(self, install_id, model_id):
+    def is_install_entitled_for_model(self, install_id, model_id, device_id=None):
         install = self.normalize_install_id(install_id)
         if not install:
             return False
-        data = self._fetch_status_payload(install)
+        device = self.normalize_device_id(device_id) or install
+        data = self._fetch_status_payload(install, device)
         if not isinstance(data, dict):
             return False
         payload = self._extract_payload_dict(data)

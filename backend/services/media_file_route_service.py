@@ -647,6 +647,10 @@ class MediaFileRouteService:
             return True
         if host_value == "runninghub.cn" or host_value.endswith(".runninghub.cn"):
             return True
+        if host_value == "aitohumanize.com" or host_value.endswith(".aitohumanize.com"):
+            return True
+        if host_value in ("grsai.dakka.com.cn", "grsai-file.dakka.com.cn"):
+            return True
         if host_value.endswith(".myqcloud.com") or host_value.endswith(".qcloud.com"):
             return True
         if host_value.endswith(".volces.com") or host_value.endswith(".aliyuncs.com") or host_value.endswith(".bcebos.com"):
@@ -701,6 +705,32 @@ class MediaFileRouteService:
             return self._json_err(400, "DNS resolve failed")
         return None
 
+    @staticmethod
+    def _quote_download_url_for_request(url):
+        parts = urllib.parse.urlsplit(str(url or ""))
+        hostname = parts.hostname or ""
+        try:
+            host = hostname.encode("idna").decode("ascii") if hostname else ""
+        except Exception:
+            host = hostname
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+
+        userinfo = ""
+        if parts.username:
+            userinfo = urllib.parse.quote(parts.username, safe="")
+            if parts.password:
+                userinfo += ":" + urllib.parse.quote(parts.password, safe="")
+            userinfo += "@"
+        try:
+            port = f":{parts.port}" if parts.port else ""
+        except Exception:
+            port = ""
+        netloc = f"{userinfo}{host}{port}" if host else parts.netloc
+        path = urllib.parse.quote(parts.path or "", safe="/%:@!$&'()*+,;=")
+        query = urllib.parse.quote(parts.query or "", safe="=&%:@/?!$'()*+,;")
+        return urllib.parse.urlunsplit((parts.scheme, netloc, path, query, ""))
+
     def _handle_save_output_from_url(self, handler):
         body = self._read_body(handler)
         data, error = self._parse_json_object(body)
@@ -750,8 +780,9 @@ class MediaFileRouteService:
         except Exception:
             max_bytes = 1024 * 1024 * 300
 
+        request_url = self._quote_download_url_for_request(url)
         try:
-            request = urllib.request.Request(url, method="GET")
+            request = urllib.request.Request(request_url, method="GET")
             request.add_header("User-Agent", "AI-Canvas/1.0")
             try:
                 with urllib.request.urlopen(request, timeout=120) as resp:

@@ -6,6 +6,9 @@ import subprocess
 import time
 
 
+VIDEO_CLIP_FPS_OPTIONS = (16, 24, 30)
+
+
 class LocalMediaProcessingRouteService:
     def __init__(
         self,
@@ -88,6 +91,16 @@ class LocalMediaProcessingRouteService:
             else int(round(fps_value))
         )
         return fps_int if fps_int > 0 else None
+
+    @staticmethod
+    def _normalize_requested_clip_fps(value):
+        if value is None or value == "":
+            return None
+        try:
+            fps = int(round(float(value)))
+        except Exception:
+            return None
+        return fps if fps in VIDEO_CLIP_FPS_OPTIONS else None
 
     def _output_dir(self):
         return os.path.abspath(self._get_output_dir())
@@ -246,6 +259,9 @@ class LocalMediaProcessingRouteService:
             return self._json_err(400, "Invalid parameters")
         if not src_path or end_sec <= start_sec:
             return self._json_err(400, "Invalid parameters")
+        requested_fps = self._normalize_requested_clip_fps(
+            data.get("fps", data.get("frameRate"))
+        )
 
         local_src, error = self._validate_src_path(
             src_path,
@@ -278,7 +294,7 @@ class LocalMediaProcessingRouteService:
                 out_path,
             ]
             startupinfo = self._startupinfo()
-            fps_int = self._ffprobe_video_fps_int(local_src, startupinfo)
+            fps_int = requested_fps or self._ffprobe_video_fps_int(local_src, startupinfo)
             if fps_int:
                 cmd.insert(-1, "-r")
                 cmd.insert(-1, str(fps_int))
@@ -298,6 +314,7 @@ class LocalMediaProcessingRouteService:
                     "path": f"output/CutVideo/{filename}",
                     "localPath": f"output/CutVideo/{filename}",
                     "url": f"/output/CutVideo/{filename}",
+                    "fps": fps_int,
                 }
             )
         except subprocess.TimeoutExpired:
