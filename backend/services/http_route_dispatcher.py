@@ -21,6 +21,7 @@ class HttpRouteDispatcher:
         is_advanced_mode,
         subscription_client_getter,
         subscription_gate_service_getter,
+        clear_subscription_authorization,
         config_route_service_getter,
         json_file_route_service_getter,
         library_file_route_service_getter,
@@ -47,6 +48,7 @@ class HttpRouteDispatcher:
         self._is_advanced_mode = is_advanced_mode
         self._get_subscription_client = subscription_client_getter
         self._get_subscription_gate_service = subscription_gate_service_getter
+        self._clear_subscription_authorization = clear_subscription_authorization
         self._get_config_route_service = config_route_service_getter
         self._get_json_file_route_service = json_file_route_service_getter
         self._get_library_file_route_service = library_file_route_service_getter
@@ -183,6 +185,21 @@ class HttpRouteDispatcher:
             self._json_ok(handler, self._with_subscription_contact_defaults(payload))
         else:
             self._json_ok(handler, self._subscription_unavailable_payload())
+        return True
+
+    def _handle_subscription_authorization_clear(self, handler):
+        if not bool(self._is_dev_build()):
+            self._json_err(handler, 403, "清空授权仅在开发模式可用")
+            return True
+        try:
+            result = self._clear_subscription_authorization()
+        except PermissionError as exc:
+            self._json_err(handler, 403, str(exc))
+            return True
+        except Exception as exc:
+            self._json_err(handler, 500, str(exc))
+            return True
+        self._json_ok(handler, result if isinstance(result, dict) else {"success": True})
         return True
 
     def _handle_heartbeat_stream(self, handler):
@@ -381,6 +398,9 @@ class HttpRouteDispatcher:
         return False
 
     def handle_post(self, handler, path):
+        if path == "/api/v2/subscription/authorization/clear":
+            return self._handle_subscription_authorization_clear(handler)
+
         if path == "/api/v2/subscription/activate":
             return self._handle_subscription_activate(handler)
 

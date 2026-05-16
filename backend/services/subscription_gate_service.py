@@ -13,6 +13,7 @@ class SubscriptionGateService:
         status_none="none",
         error_model_not_entitled="SUBSCRIPTION_MODEL_NOT_ENTITLED",
         model_name_map=None,
+        model_id_normalizer=None,
         cache_max=2048,
         success_logger=None,
     ):
@@ -23,6 +24,9 @@ class SubscriptionGateService:
             error_model_not_entitled or "SUBSCRIPTION_MODEL_NOT_ENTITLED"
         ).strip() or "SUBSCRIPTION_MODEL_NOT_ENTITLED"
         self.model_name_map = dict(model_name_map or {})
+        self.model_id_normalizer = (
+            model_id_normalizer if callable(model_id_normalizer) else None
+        )
         self.cache_max = max(1, int(cache_max or 2048))
         self.success_logger = success_logger
         self._allow_cache = OrderedDict()
@@ -36,14 +40,10 @@ class SubscriptionGateService:
         s = str(value or "").strip()
         if not s:
             return ""
-        if s == "ai-app/2047787809091620866":
-            return "runninghub/2047787809091620866"
-        if s == "ai-app/2050165249344585729":
-            return "runninghub/2050165249344585729"
-        if s == "ai-app/1994718111704158209":
-            return "runninghub/1994718111704158209"
-        if s == "advanced_voice_clone":
-            return "runninghub/2050165249344585729"
+        if self.model_id_normalizer:
+            normalized = str(self.model_id_normalizer(s) or "").strip()
+            if normalized:
+                return normalized
         if s.startswith("runninghub/"):
             return s
         if s.startswith("dreamina/"):

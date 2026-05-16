@@ -18,6 +18,8 @@
 - 除非用户明确要求，否则不要改 `README.md`。
 - 修改后必须运行与改动范围匹配的测试或检查；不能运行时必须说明原因和剩余风险。
 - 不要声称通过了未实际运行的命令。
+- 修改前先查看 `git status --short`，识别用户或其他任务已有改动；禁止覆盖、回滚、格式化无关改动。
+- 不要修改构建产物、缓存或报告目录，例如 `dist/`、`dist-obfuscated/`、`release/`、`test-results/`、`playwright-report/`，除非任务明确要求打包、发布或处理这些产物。
 
 ## AI 实际工作流程
 
@@ -31,9 +33,11 @@
 
 2. 判断是否触发专项规则：
    - 涉及模型、工作流、生成任务、输入槽、参数面板、模型菜单、订阅 / VIP、结果展示时，先走 `registry` / `manifest` / `schema` / `adapter` / `runtime` 判断。
-   - 涉及 Electron、IPC、文件、路径、下载、外链、系统能力、打包环境时，先判断落点是 `main` / `preload` / `renderer` / `IPC` / 打包配置，并查阅 `docs/electron-rules.md`。
+   - 涉及 Electron、IPC、文件、路径、下载、外链、系统能力、打包环境时，先判断落点是 `electron/main.js` / `electron/preload.cjs` / `renderer` / `electron/ipc/*` / 打包配置，并查阅 `docs/electron-rules.md`。
    - 涉及模块职责、状态流、渲染、交互分层、坐标换算、网络收口时，先查阅 `docs/architecture.md`。
    - 涉及样式时，先查 `styles/` 中是否已有对应样式、变量、主题 token 和组件结构。
+   - 涉及编码、终端中文输出或 Windows 脚本时，先查阅 `docs/governance/terminal-encoding.md`。
+   - 涉及新增测试、治理文档、阶段记录或 SOP 时，先查阅 `docs/governance/test-and-doc-placement-rules.md`。
 
 3. 修改前必须先搜索真实实现：
    - 搜索现有文件、函数、调用链、测试和相似实现。
@@ -46,7 +50,7 @@
    - 高频拖拽、缩放、框选等交互放 `interaction`。
    - 坐标换算放 `math`。
    - 网络请求放 `api/`。
-   - Electron 系统能力放 `main`，通过 `preload` 暴露最小 IPC API。
+   - 根目录 `main.js` 是渲染端应用启动与装配入口；Electron 系统能力放 `electron/main.js`，通过 `electron/preload.cjs` 暴露最小 IPC API。
    - 模型能力优先新增或修改 manifest，不优先写硬编码分支。
 
 5. 修改前输出说明：
@@ -66,6 +70,7 @@
    - 不新增绕过 `api/` 的网络请求。
    - 不新增散落的 `modelId` / `workflowId` / `provider` 判断。
    - 不新增非 UTF-8 文本文件。
+   - 若必须临时违反架构边界，只能登记到 `docs/governance/architecture-exceptions.md` 的 JSON 台账，并写明回收条件。
 
 7. 验证：
    - 运行与改动范围匹配的测试或检查。
@@ -318,7 +323,17 @@ RunningHub 工作流新增时，不要优先往 `RunningHubAdapter.js` 堆大段
 - `interaction.js`：只处理高频交互；禁止写业务决策；拖拽中的高频临时数据不要持续写入 Store。
 - `math.js`：统一处理坐标换算；禁止其他模块重复实现。
 - `api/`：统一发起网络请求；禁止其他文件直接请求。
-- `main.js`：只做初始化、订阅、事件代理、模块装配；禁止承载具体业务细节。
+- 根目录 `main.js`：渲染端应用入口，只做初始化、订阅、事件代理、节点注册和模块装配；禁止承载具体业务细节。
+- `electron/main.js`：Electron main process 入口，负责窗口、系统能力、IPC 装配、路径和打包环境差异；具体 IPC 业务优先拆到 `electron/ipc/*`。
+- `electron/preload.cjs`：安全桥，只暴露最小、语义化的 `contextBridge` API，不直接暴露 `ipcRenderer`。
+
+## 治理文档规则
+
+- 架构例外只能登记在 `docs/governance/architecture-exceptions.md`；口头约定无效。
+- active 架构例外必须有明确 `expiryDate`、`recycleOwner`、`recycleCriteria`，默认窗口不超过 14 天。
+- 新增跨模块、集成、契约测试优先放在 `tests/`；强耦合模块测试允许与源码共置。
+- 正式治理文档只放在 `docs/governance/` 或 `docs/refactor/`；不要往仓库根目录放临时调查记录。
+- `docs/test/`、`docs/3DEDIT/` 等历史对话或阶段性记录只能作为 archive 参考，不能作为当前接入 SOP 执行。
 
 ## Electron 规则
 
@@ -326,10 +341,11 @@ RunningHub 工作流新增时，不要优先往 `RunningHubAdapter.js` 堆大段
 
 涉及 Electron 分层、安全、IPC、路径、打包规则时，先查阅 `docs/electron-rules.md`。
 
-- 涉及 Electron 的改动，必须先判断落点：`main` / `preload` / `renderer` / `IPC` / 打包配置。
+- 涉及 Electron 的改动，必须先判断落点：`electron/main.js` / `electron/preload.cjs` / `renderer` / `electron/ipc/*` / 打包配置。
 - `renderer` 视为不可信 UI 层，禁止直接使用 Node/Electron 高权限 API。
 - `preload` 只通过 `contextBridge` 暴露最小必要 API，禁止直接暴露 `ipcRenderer`。
-- 所有系统能力、文件读写、路径、下载、外链、原生能力优先放在 `main`。
+- 所有系统能力、文件读写、路径、下载、外链、原生能力优先放在 `electron/main.js` 或其装配的 `electron/ipc/*` 模块。
+- 新增 IPC 时优先使用语义化、稳定、可搜索的 channel，并在 main 侧做最终输入校验。
 - 实现时必须同时考虑开发环境与打包环境差异，禁止硬编码路径。
 - 禁止为了跑通功能放松 `contextIsolation`、`nodeIntegration`、`sandbox` 等安全配置，除非用户明确要求并说明风险。
 
@@ -374,7 +390,13 @@ Provider Adapter 只处理厂商差异，不承载完整业务流程。
 - 涉及架构边界时，优先运行 `npm run check:architecture`。
 - 涉及核心 Store / math / API / preload 契约时，优先运行对应 `node --test` 或 `npm run test:critical`。
 - 涉及模型 registry / manifest 时，优先运行 `node --test tests/manifestRegistry.test.js`。
-- 涉及 Electron preload 或 IPC 契约时，优先运行对应 preload / IPC contract 测试。
+- 涉及 API、provider、上传下载、RunningHub 或任务请求时，优先运行 `npm run test:api:critical`；范围更小时可运行对应 `node --test` 文件。
+- 涉及 RunningHub 工作流或模型 API 回归时，优先运行 `npm run test:runninghub`，并结合 `docs/governance/runninghub-regression-checklist.md` 判断是否需要实机矩阵。
+- 涉及图片生成节点编排时，优先运行 `npm run test:image-node-models`。
+- 涉及 storyboard、拖拽、缩放、框选等交互时，优先运行 `npm run test:storyboard` 或对应交互测试。
+- 涉及 Electron preload 或 IPC 契约时，优先运行 `node --test tests/preloadBridgeContract.test.js tests/mainIpcSetup.test.js` 或对应 IPC 测试。
+- 涉及 UI 启动链路、Electron 壳层集成或关键用户路径时，优先运行 `npm run test:e2e:smoke`。
+- 提交前或大范围修改后优先运行 `npm run precommit:check`。
 - 若无法运行测试，必须明确说明原因和剩余风险。
 - 不要声称通过了未实际运行的命令。
 
@@ -386,4 +408,3 @@ Provider Adapter 只处理厂商差异，不承载完整业务流程。
 - 后端通过 adapter 自动映射。
 - 任务生命周期由统一 runtime 管。
 - 特殊能力通过 extension point 插入。
-

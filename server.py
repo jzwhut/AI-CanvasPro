@@ -52,6 +52,13 @@ from backend.services.media_file_route_service import MediaFileRouteService
 from backend.services.local_media_processing_route_service import LocalMediaProcessingRouteService
 from backend.services.remote_proxy_route_service import RemoteProxyRouteService
 from backend.services.subscription_gate_service import SubscriptionGateService
+from backend.services.subscription_gate_manifest import (
+    get_runninghub_subscription_workflow_ids,
+    get_subscription_gate_model_id_by_key,
+    get_subscription_gate_model_ids,
+    get_subscription_gate_model_name_map,
+    normalize_subscription_gate_model_id,
+)
 from backend.services.subscription_client import SubscriptionRemoteClient
 from backend.services.dreamina_cli_service import DreaminaCliService
 from backend.services.dreamina_route_service import DreaminaRouteService
@@ -154,6 +161,21 @@ def _get_optional_path_env(name):
         return ""
     return os.path.abspath(os.path.expandvars(os.path.expanduser(raw)))
 
+def _get_optional_path_env_list(base_name, max_items=4):
+    values = []
+    seen = set()
+    for index in range(1, max_items + 1):
+        name = base_name if index == 1 else f"{base_name}_{index}"
+        value = _get_optional_path_env(name)
+        if not value:
+            continue
+        key = os.path.normcase(os.path.abspath(value))
+        if key in seen:
+            continue
+        seen.add(key)
+        values.append(value)
+    return values
+
 def _get_executable_env(name, fallback):
     raw = str(os.environ.get(name, "") or "").strip()
     if not raw:
@@ -232,10 +254,14 @@ DEFAULT_DATA_DIR = _get_path_env("AIC_DATA_DIR", os.path.join(DIRECTORY, "data")
 DEFAULT_UPLOADS_DIR = _get_path_env("AIC_UPLOADS_DIR", os.path.join(DEFAULT_DATA_DIR, "uploads"))
 DEFAULT_ASSETS_DIR = _get_path_env("AIC_ASSETS_DIR", os.path.join(DEFAULT_DATA_DIR, "assets"))
 DEFAULT_WORKFLOWS_DIR = _get_path_env("AIC_WORKFLOWS_DIR", os.path.join(DEFAULT_DATA_DIR, "workflows"))
-LEGACY_DEFAULT_CANVAS_DIR = _get_optional_path_env("AIC_LEGACY_CANVAS_DIR")
-LEGACY_DEFAULT_OUTPUT_DIR = _get_optional_path_env("AIC_LEGACY_OUTPUT_DIR")
-LEGACY_DEFAULT_DATA_DIR = _get_optional_path_env("AIC_LEGACY_DATA_DIR")
-LEGACY_DEFAULT_UPLOADS_DIR = _get_optional_path_env("AIC_LEGACY_UPLOADS_DIR")
+LEGACY_DEFAULT_CANVAS_DIRS = _get_optional_path_env_list("AIC_LEGACY_CANVAS_DIR")
+LEGACY_DEFAULT_OUTPUT_DIRS = _get_optional_path_env_list("AIC_LEGACY_OUTPUT_DIR")
+LEGACY_DEFAULT_DATA_DIRS = _get_optional_path_env_list("AIC_LEGACY_DATA_DIR")
+LEGACY_DEFAULT_UPLOADS_DIRS = _get_optional_path_env_list("AIC_LEGACY_UPLOADS_DIR")
+LEGACY_DEFAULT_CANVAS_DIR = LEGACY_DEFAULT_CANVAS_DIRS[0] if LEGACY_DEFAULT_CANVAS_DIRS else ""
+LEGACY_DEFAULT_OUTPUT_DIR = LEGACY_DEFAULT_OUTPUT_DIRS[0] if LEGACY_DEFAULT_OUTPUT_DIRS else ""
+LEGACY_DEFAULT_DATA_DIR = LEGACY_DEFAULT_DATA_DIRS[0] if LEGACY_DEFAULT_DATA_DIRS else ""
+LEGACY_DEFAULT_UPLOADS_DIR = LEGACY_DEFAULT_UPLOADS_DIRS[0] if LEGACY_DEFAULT_UPLOADS_DIRS else ""
 FFMPEG_EXE = _get_executable_env("AIC_FFMPEG_EXE", "ffmpeg")
 FFPROBE_EXE = _get_executable_env("AIC_FFPROBE_EXE", "ffprobe")
 SYSTEM_FILE_SAVE_PATHS_ENABLED = bool(str(os.environ.get("AIC_USER_DIR", "") or "").strip())
@@ -259,34 +285,10 @@ IMAGE_DERIVATIVE_DISPLAY_QUALITY = 78
 IMAGE_DERIVATIVE_THUMB_QUALITY = 70
 IMAGE_DERIVATIVE_ROOT_DIRNAME = "_derived"
 
-V54_VIP_MODEL_ID = "runninghub/2041741496667348994"
-V54_VIP_WORKFLOW_ID = "2041741496667348994"
-RH_VIDEO_HD_VIP_MODEL_ID = "runninghub/2047787809091620866"
-RH_VIDEO_HD_VIP_WORKFLOW_ID = "2047787809091620866"
-RH_ADVANCED_VOICE_CLONE_VIP_MODEL_ID = "runninghub/2050165249344585729"
-RH_ADVANCED_VOICE_CLONE_VIP_WORKFLOW_ID = "2050165249344585729"
-RH_ANIME_REAL_VIP_MODEL_ID = "runninghub/1994718111704158209"
-RH_ANIME_REAL_VIP_WORKFLOW_ID = "1994718111704158209"
-DREAMINA_VIDEO_VIP_MODEL_ID = "dreamina/video_vip"
-VIDEO_VIP_MODEL_IDS = (
-    "runninghub/2041741496667348994",
-    RH_VIDEO_HD_VIP_MODEL_ID,
-    RH_ADVANCED_VOICE_CLONE_VIP_MODEL_ID,
-    RH_ANIME_REAL_VIP_MODEL_ID,
-    "dreamina/video_vip",
-)
-VIDEO_VIP_WORKFLOW_IDS = set(
-    mid.split("/", 1)[1]
-    for mid in VIDEO_VIP_MODEL_IDS
-    if mid.startswith("runninghub/") and "/" in mid
-)
-VIDEO_VIP_MODEL_NAME_MAP = {
-    RH_VIDEO_HD_VIP_MODEL_ID: "视频高清",
-    RH_ADVANCED_VOICE_CLONE_VIP_MODEL_ID: "进阶声音克隆",
-    RH_ANIME_REAL_VIP_MODEL_ID: "漫画转真人",
-    "runninghub/2041741496667348994": "视频编辑V5.4",
-    "dreamina/video_vip": "即梦视频",
-}
+DREAMINA_VIDEO_VIP_MODEL_ID = get_subscription_gate_model_id_by_key("dreaminaVideoVip")
+VIDEO_VIP_MODEL_IDS = get_subscription_gate_model_ids()
+VIDEO_VIP_WORKFLOW_IDS = get_runninghub_subscription_workflow_ids()
+VIDEO_VIP_MODEL_NAME_MAP = get_subscription_gate_model_name_map()
 SUB_STATUS_NONE = "none"
 SUB_STATUS_ACTIVE = "active"
 SUB_STATUS_EXPIRED = "expired"
@@ -335,6 +337,8 @@ def _get_system_state_dir():
 
 SYSTEM_STATE_DIR = _get_system_state_dir()
 SYSTEM_SETTINGS_FILE = os.path.join(SYSTEM_STATE_DIR, "settings.json")
+DEVICE_IDENTITY_FILENAME = "device-identity.json"
+SUBSCRIPTION_AUTHORIZATION_ID_KEYS = ("installId", "install_id", "deviceId", "device_id")
 
 
 def _read_json_file(path, default=None):
@@ -370,9 +374,23 @@ def _same_storage_path(a, b):
     except Exception:
         return False
 
-def _replace_legacy_default_path(raw, legacy_default, next_default):
-    if raw and _same_storage_path(raw, legacy_default):
-        return os.path.abspath(next_default)
+def _unique_storage_paths(paths):
+    values = []
+    for path_value in paths or ():
+        if not path_value:
+            continue
+        if any(_same_storage_path(path_value, existing) for existing in values):
+            continue
+        values.append(os.path.abspath(path_value))
+    return values
+
+def _legacy_default_candidates(primary, additional=()):
+    return _unique_storage_paths((primary, *(additional or ())))
+
+def _replace_legacy_default_path(raw, legacy_defaults, next_default):
+    for legacy_default in legacy_defaults or ():
+        if raw and _same_storage_path(raw, legacy_default):
+            return os.path.abspath(next_default)
     return raw
 
 def _migrate_legacy_default_file_save_paths(paths):
@@ -380,10 +398,10 @@ def _migrate_legacy_default_file_save_paths(paths):
         return paths
     migrated = dict(paths)
     replacements = (
-        ("canvasDir", LEGACY_DEFAULT_CANVAS_DIR, DEFAULT_CANVAS_DIR),
-        ("outputDir", LEGACY_DEFAULT_OUTPUT_DIR, DEFAULT_OUTPUT_DIR),
-        ("dataDir", LEGACY_DEFAULT_DATA_DIR, DEFAULT_DATA_DIR),
-        ("tempDir", LEGACY_DEFAULT_UPLOADS_DIR, DEFAULT_UPLOADS_DIR),
+        ("canvasDir", _legacy_default_candidates(LEGACY_DEFAULT_CANVAS_DIR, LEGACY_DEFAULT_CANVAS_DIRS), DEFAULT_CANVAS_DIR),
+        ("outputDir", _legacy_default_candidates(LEGACY_DEFAULT_OUTPUT_DIR, LEGACY_DEFAULT_OUTPUT_DIRS), DEFAULT_OUTPUT_DIR),
+        ("dataDir", _legacy_default_candidates(LEGACY_DEFAULT_DATA_DIR, LEGACY_DEFAULT_DATA_DIRS), DEFAULT_DATA_DIR),
+        ("tempDir", _legacy_default_candidates(LEGACY_DEFAULT_UPLOADS_DIR, LEGACY_DEFAULT_UPLOADS_DIRS), DEFAULT_UPLOADS_DIR),
     )
     changed = False
     for key, legacy_default, next_default in replacements:
@@ -458,6 +476,19 @@ def _migrate_system_file_save_paths_to_user_settings(local_settings, paths):
         next_settings["fileSavePaths"] = _normalize_file_save_paths_for_policy(paths)
         _write_json_file(SETTINGS_FILE, next_settings)
         _clear_system_file_save_paths()
+    except Exception:
+        pass
+
+
+def _persist_local_file_save_paths_if_needed(local_settings, paths):
+    if not SYSTEM_FILE_SAVE_PATHS_ENABLED or not _has_file_save_paths(local_settings):
+        return
+    if not isinstance(paths, dict):
+        return
+    try:
+        next_settings = dict(local_settings) if isinstance(local_settings, dict) else {}
+        next_settings["fileSavePaths"] = _normalize_file_save_paths_for_policy(paths)
+        _write_json_file(SETTINGS_FILE, next_settings)
     except Exception:
         pass
 
@@ -590,6 +621,71 @@ def _move_missing_tree(src, dst):
             except Exception:
                 pass
     _remove_empty_dirs(src)
+
+
+def _is_using_default_file_save_paths(paths):
+    if not isinstance(paths, dict):
+        return False
+    return (
+        _same_storage_path(paths.get("canvasDir"), DEFAULT_CANVAS_DIR)
+        and _same_storage_path(paths.get("outputDir"), DEFAULT_OUTPUT_DIR)
+        and _same_storage_path(paths.get("dataDir"), DEFAULT_DATA_DIR)
+        and _same_storage_path(paths.get("tempDir"), DEFAULT_UPLOADS_DIR)
+    )
+
+
+def _path_at(paths, index):
+    return paths[index] if index < len(paths) else ""
+
+
+def _legacy_default_file_save_path_sets():
+    canvas_dirs = _legacy_default_candidates(LEGACY_DEFAULT_CANVAS_DIR, LEGACY_DEFAULT_CANVAS_DIRS)
+    output_dirs = _legacy_default_candidates(LEGACY_DEFAULT_OUTPUT_DIR, LEGACY_DEFAULT_OUTPUT_DIRS)
+    data_dirs = _legacy_default_candidates(LEGACY_DEFAULT_DATA_DIR, LEGACY_DEFAULT_DATA_DIRS)
+    uploads_dirs = _legacy_default_candidates(LEGACY_DEFAULT_UPLOADS_DIR, LEGACY_DEFAULT_UPLOADS_DIRS)
+    total = max(len(canvas_dirs), len(output_dirs), len(data_dirs), len(uploads_dirs), 0)
+    legacy_sets = []
+    for index in range(total):
+        data_dir = _path_at(data_dirs, index)
+        uploads_dir = _path_at(uploads_dirs, index) or (os.path.join(data_dir, "uploads") if data_dir else "")
+        paths = {
+            "userDir": DEFAULT_USER_DIR,
+            "canvasDir": _path_at(canvas_dirs, index),
+            "outputDir": _path_at(output_dirs, index),
+            "dataDir": data_dir,
+            "tempDir": uploads_dir,
+        }
+        if any(paths.get(key) for key in ("canvasDir", "outputDir", "dataDir", "tempDir")):
+            legacy_sets.append(paths)
+    return legacy_sets
+
+
+def _move_legacy_default_tree(src, dst):
+    if not src or not dst:
+        return False
+    if _same_storage_path(src, dst) or _is_same_or_nested_path(src, dst):
+        return False
+    if not os.path.isdir(src):
+        return False
+    _move_missing_tree(src, dst)
+    return True
+
+
+def _migrate_legacy_default_files_to_current(paths=None):
+    if not SYSTEM_FILE_SAVE_PATHS_ENABLED:
+        return False
+    current = paths if isinstance(paths, dict) else _current_file_save_paths()
+    if not _is_using_default_file_save_paths(current):
+        return False
+    moved = False
+    for legacy_paths in _legacy_default_file_save_path_sets():
+        moved = _move_legacy_default_tree(legacy_paths.get("canvasDir"), current.get("canvasDir")) or moved
+        moved = _move_legacy_default_tree(legacy_paths.get("outputDir"), current.get("outputDir")) or moved
+        moved_data = _move_legacy_default_tree(legacy_paths.get("dataDir"), current.get("dataDir"))
+        moved = moved_data or moved
+        if not moved_data:
+            moved = _move_legacy_default_tree(legacy_paths.get("tempDir"), current.get("tempDir")) or moved
+    return moved
 
 
 def _new_file_save_migration_job_id():
@@ -978,6 +1074,7 @@ SUBSCRIPTION_GATE_SERVICE = SubscriptionGateService(
     status_none=SUB_STATUS_NONE,
     error_model_not_entitled=SUB_ERROR_MODEL_NOT_ENTITLED,
     model_name_map=VIDEO_VIP_MODEL_NAME_MAP,
+    model_id_normalizer=normalize_subscription_gate_model_id,
     success_logger=lambda decision: print("[subscription][vip_gate] first VIP verification passed"),
 )
 os.makedirs(SYSTEM_STATE_DIR, exist_ok=True)
@@ -991,6 +1088,11 @@ try:
     _startup_applied_file_save_paths = _apply_file_save_paths(
         _normalize_file_save_paths_for_policy(_startup_settings.get("fileSavePaths")),
         migrate=False,
+    )
+    _migrate_legacy_default_files_to_current(_startup_applied_file_save_paths)
+    _persist_local_file_save_paths_if_needed(
+        _startup_local_settings,
+        _startup_applied_file_save_paths,
     )
     if not _has_file_save_paths(_startup_local_settings) and _startup_system_file_save_paths:
         _migrate_system_file_save_paths_to_user_settings(
@@ -1078,6 +1180,133 @@ def _write_user_settings(data, migrate=True):
         next_system_settings["installId"] = install_id
     next_system_settings.pop("fileSavePaths", None)
     _write_json_file(SYSTEM_SETTINGS_FILE, next_system_settings)
+
+
+def _subscription_user_data_root():
+    try:
+        return os.path.dirname(os.path.abspath(USER_DIR))
+    except Exception:
+        return ""
+
+
+def _subscription_device_identity_paths():
+    paths = [
+        os.path.join(_subscription_user_data_root(), DEVICE_IDENTITY_FILENAME),
+        os.path.join(SYSTEM_STATE_DIR, DEVICE_IDENTITY_FILENAME),
+    ]
+    seen = set()
+    unique = []
+    for path_value in paths:
+        path_text = str(path_value or "").strip()
+        if not path_text:
+            continue
+        normalized = os.path.abspath(path_text)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(normalized)
+    return unique
+
+
+def _subscription_settings_authorization_paths():
+    paths = [
+        SETTINGS_FILE,
+        SYSTEM_SETTINGS_FILE,
+        os.path.join(DIRECTORY, "user", "settings.json"),
+    ]
+    seen = set()
+    unique = []
+    for path_value in paths:
+        path_text = str(path_value or "").strip()
+        if not path_text:
+            continue
+        normalized = os.path.abspath(path_text)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(normalized)
+    return unique
+
+
+def _collect_subscription_authorization_ids_from_file(path):
+    data = _read_json_file(path, {})
+    if not isinstance(data, dict):
+        return [], []
+    install_ids = []
+    device_ids = []
+    for key in ("installId", "install_id"):
+        value = str(data.get(key) or "").strip()
+        if value and value not in install_ids:
+            install_ids.append(value)
+    for key in ("deviceId", "device_id"):
+        value = str(data.get(key) or "").strip()
+        if value and value not in device_ids:
+            device_ids.append(value)
+    return install_ids, device_ids
+
+
+def _strip_subscription_authorization_keys(path):
+    data = _read_json_file(path, {})
+    if not isinstance(data, dict):
+        return False
+    next_data = dict(data)
+    changed = False
+    for key in SUBSCRIPTION_AUTHORIZATION_ID_KEYS:
+        if key in next_data:
+            next_data.pop(key, None)
+            changed = True
+    if changed:
+        _write_json_file(path, next_data)
+    return changed
+
+
+def _clear_subscription_authorization():
+    if not _is_dev_build():
+        raise PermissionError("仅开发模式可清空授权")
+
+    install_ids = []
+    device_ids = []
+    for path_value in [
+        *_subscription_settings_authorization_paths(),
+        *_subscription_device_identity_paths(),
+    ]:
+        next_install_ids, next_device_ids = _collect_subscription_authorization_ids_from_file(
+            path_value,
+        )
+        install_ids.extend([item for item in next_install_ids if item not in install_ids])
+        device_ids.extend([item for item in next_device_ids if item not in device_ids])
+
+    cleared = []
+    for label, path_value in (
+        ("userSettings", SETTINGS_FILE),
+        ("systemSettings", SYSTEM_SETTINGS_FILE),
+        ("legacyUserSettings", os.path.join(DIRECTORY, "user", "settings.json")),
+    ):
+        if _strip_subscription_authorization_keys(path_value):
+            cleared.append(label)
+
+    for path_value in _subscription_device_identity_paths():
+        try:
+            if os.path.isfile(path_value):
+                os.remove(path_value)
+                cleared.append("deviceIdentity")
+        except FileNotFoundError:
+            pass
+
+    for install_id in install_ids:
+        targets = device_ids or [""]
+        for device_id in targets:
+            try:
+                SUBSCRIPTION_GATE_SERVICE.clear_vip_allow_cache(install_id, device_id)
+            except Exception:
+                pass
+
+    return {
+        "success": True,
+        "status": SUB_STATUS_NONE,
+        "cleared": cleared,
+    }
+
 
 def _is_dev_build():
     return os.path.exists(os.path.join(DIRECTORY, ".dev"))
@@ -1196,6 +1425,7 @@ _SENSITIVE_API_PREFIXES = (
     "/api/v2/save_output_from_url",
     "/api/v2/output-files",
     "/api/v2/subscription/activate",
+    "/api/v2/subscription/authorization/clear",
     "/api/v2/update/apply",
     "/api/v2/user",
     "/api/v2/video",
@@ -1411,6 +1641,7 @@ HTTP_ROUTE_DISPATCHER = HttpRouteDispatcher(
     is_advanced_mode=_is_advanced_mode,
     subscription_client_getter=lambda: SUBSCRIPTION_CLIENT,
     subscription_gate_service_getter=lambda: SUBSCRIPTION_GATE_SERVICE,
+    clear_subscription_authorization=_clear_subscription_authorization,
     config_route_service_getter=lambda: CONFIG_ROUTE_SERVICE,
     json_file_route_service_getter=lambda: JSON_FILE_ROUTE_SERVICE,
     library_file_route_service_getter=lambda: LIBRARY_FILE_ROUTE_SERVICE,
