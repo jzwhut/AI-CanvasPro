@@ -1,3 +1,23 @@
+🎉 V0.4.7 版本更新啦！
+
+[previewVideoUrl]: https://www.bilibili.com/video/BV1RX5z6gEXq/
+
+✨ 新增功能：
+- 新增agne ai厂商 设置-apikey可以配置密钥 现在所有模型都免费！！！赶紧去用阿！
+- 文本生成节点 新增agne ai厂商 agnes 2.0 flash
+- 图像生成节点 新增agne ai厂商 agnes image 2.0 flash /2.1 flash
+- 视频生成节点 新增agne ai厂商 agnes video V2.0 
+- 增加图像生成节点 /预设 故事板分镜 8个
+
+🐛 修复与优化：
+- 优化 分镜脚本节点的提示词以及显示方式
+
+AI-CanvasPro！ windows/mac 应用版本已发布 欢迎体验！ 
+BUG问题或要新增功能反馈文档：https://i1etb6xynr.feishu.cn/wiki/N2C3wD6SgisOpek11mfcfJCinkr?from=from_copylink
+
+---
+
+
 🎉 V0.4.6 版本更新啦！
 
 [previewVideoUrl]: https://www.bilibili.com/video/BV1RX5z6gEXq/

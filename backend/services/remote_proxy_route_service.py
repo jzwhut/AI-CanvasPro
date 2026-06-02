@@ -4,6 +4,12 @@ import urllib.parse
 import urllib.request
 
 
+PUBLIC_UPLOAD_API_URLS = {
+    "https://uguu.se/upload",
+    "https://telegra.ph/upload",
+}
+
+
 class RemoteProxyRouteService:
     def __init__(
         self,
@@ -84,6 +90,10 @@ class RemoteProxyRouteService:
         return "default"
 
     @staticmethod
+    def _is_public_upload_api_url(api_url):
+        return str(api_url or "").strip().rstrip(",") in PUBLIC_UPLOAD_API_URLS
+
+    @staticmethod
     def _requests_module():
         import requests
 
@@ -159,9 +169,9 @@ class RemoteProxyRouteService:
 
     def _handle_upload_proxy(self, handler):
         query = self._parse_query(handler.path)
-        api_url = query.get("apiUrl", [""])[0].strip()
+        api_url = query.get("apiUrl", [""])[0].strip().rstrip(",")
         api_key = self._extract_proxy_api_key(handler, query)
-        if not api_url or not api_key:
+        if not api_url or (not api_key and not self._is_public_upload_api_url(api_url)):
             return self._json_err(400, "Missing apiUrl or apiKey")
 
         try:
@@ -170,7 +180,8 @@ class RemoteProxyRouteService:
             content_type = handler.headers.get("Content-Type", "")
 
             req = urllib.request.Request(api_url, data=body, method="POST")
-            req.add_header("Authorization", f"Bearer {api_key}")
+            if api_key:
+                req.add_header("Authorization", f"Bearer {api_key}")
             req.add_header("Content-Type", content_type)
             req.add_header("Content-Length", str(len(body)))
 

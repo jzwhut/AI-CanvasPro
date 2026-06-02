@@ -39,6 +39,7 @@ dev-helper.js
 发布.md
 .tmp/
 .tmp
+.tmp_*
 
 models/sam3_onnx/
 
